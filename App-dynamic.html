@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<!--
+  *
+  *  The custom instance of App.html is written for Rally dashboard integration.
+  *  Rally has these restictions:
+  *     - reference https resources only
+  *     - cross-site-scripting protection prevents the child iframe, where the custom html/javascript is displayed,
+  *       from having access to it's parent i.e. 'window.location'
+  *
+-->
+<html>
+<head>
+    <title>DefectDensity</title>
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+
+    <script type="text/javascript" src="https://rally1.rallydev.com/apps/2.0rc2/sdk.js"></script>
+    <script type="text/javascript" src="https://code.jquery.com/jquery.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.11.0-beta.2/jquery-ui.js"></script>
+
+    <script type="text/javascript" src="rally-ws-0.1.0.js"></script>
+    <script type="text/javascript" src="https://3.34.2.84:8443/defectdensity/custom/sonar-ws-0.1.0.js"></script>
+
+    <script type="text/javascript">
+        var rallyKey = "GECID|GECA Lending";
+        var rkeys = rallyKey.split("|");
+
+        var sonarUrl = "https://3.34.2.84:8443/defectdensity/SonarWS?url=cmf-2ua3101vnr.comfin.ge.com:9000|https://sonar-nolaswcoe.frictionless.capital.ge.com";
+        var urlKeys = sonarUrl.split("|");
+
+        var sonarKey = "GECID, eBanx|com.ge.capital.lpm:lpm:dev";
+        var skeys = sonarKey.split("|");
+
+        var nclocmap = new Array();
+        var rallytoken = "";
+        var today = new Date();
+
+        var densityHtml;
+        var denTypeHtml;
+        var defectsHtml;
+
+        Rally.loadScripts(
+        [],
+        function() {
+            Rally.launchApp('', {
+                name:"DefectDensity"
+            });
+        },
+        true);
+		
+        if (typeof SonarService === "undefined") {
+              document.write("To view DefectDensity, you must accept content from <a href='https://3.34.2.84:8443/defectdensity' target=_new>SweapDev</a>.");
+              window.onload = function(e) {
+                 document.getElementById('dialog').style.visibility = 'hidden';
+              }
+        }
+
+       var tnclocmap = new Array();
+
+       $(document).ready(function() {
+          var promises = new Array();
+
+          // Get chart row templates
+            densityHtml = document.getElementById('chart_row_density').innerHTML;
+            denTypeHtml = document.getElementById('chart_row_densityByType').innerHTML;
+            defectsHtml = document.getElementById('chart_row_defects').innerHTML;
+
+          // Check connectivity/auth to SonarQube
+          for (var i=0; i < urlKeys.length; i++) {
+              promises.push(SonarService.isAuthorized(urlKeys[i]));
+          }
+          Deft.Promise.all(promises)
+               .then({
+                   success: function() {
+                      isAuthorizedSonarApi = true;
+                   },
+                   failure: function() {
+                      isAuthorizedSonarApi = false;
+                      for (var i=0; i < urlKeys.length; i++) {
+                          if (urlKeys[i].indexOf("cmf-2ua3101vnr.comfin.ge.com") < 0) {
+                              document.write("To view DefectDensity, you must be authenticated at SonarQube at&nbsp;<a href='" + urlKeys[i] + "' target=_new>" + urlKeys[i]+ "</a></br>");
+                          }
+                      }
+               }});
+
+          // Run defects analysis
+          promises = new Array();
+          for (var chartnum=0; chartnum < skeys.length; chartnum++) {
+             tnclocmap[chartnum] = new Array();
+             promises.push(SonarService.getHistoricalMetrics(urlKeys[chartnum], skeys[chartnum], "ncloc", tnclocmap[chartnum]))
+          }
+          Deft.Promise.all(promises)
+               .then({
+                   success: function(recordSets) {
+                   for (var chartnum=0; chartnum < recordSets.length; chartnum++) {
+                       //$('#projectHeader\\#'+chartnum).text(skeys[chartnum] + ' Defect Density');
+                       prepChartRows(chartnum);
+                       nclocmap = recordSets[chartnum];
+                       tnclocmap[chartnum] = recordSets[chartnum];
+                       CalculateDensity.main(chartnum);
+                   }
+               }});
+       });
+
+       function prepChartRows(chartnum) { 
+          if (chartnum > 0) {
+             var addRow = document.createElement("tr");
+             addRow.setAttribute('id', 'chart_row_density#'+chartnum);
+             var addHtml = densityHtml.replace(/#0/g, "#"+chartnum);
+             addRow.innerHTML = addHtml; 
+             document.getElementById('chartsTable').childNodes[1].appendChild(addRow);
+
+             var addRow = document.createElement("tr");
+             addRow.setAttribute('id', 'chart_row_densityByType#'+chartnum);
+             var addHtml = denTypeHtml.replace(/#0/g, "#"+chartnum);
+             addRow.innerHTML = addHtml; 
+             document.getElementById('chartsTable').childNodes[1].appendChild(addRow);
+
+             var addRow = document.createElement("tr");
+             addRow.setAttribute('id', 'chart_row_defects#'+chartnum);
+             var addHtml = defectsHtml.replace(/#0/g, "#"+chartnum);
+             addRow.innerHTML = addHtml; 
+             document.getElementById('chartsTable').childNodes[1].appendChild(addRow);
+          }
+        }
+
+
+    </script>
+
+    <script type="text/javascript" src="https://www.google.com/jsapi"></script>
+	
+	<script  type="text/javascript">
+        var defectsOpenedArray = new Array();
+        var defectsClosedArray = new Array();
+        var chartDefectsOpenDiscovered = new Array();
+        var chartDefectDensity = new Array();
+        var accumulativeOpen = new Array();
+        var nclocAtSprint = new Array();
+        var sprints = new Array();
+
+        var defects = new Array();
+        var maxOpen = 0;
+        var maxDensity = 0;
+        var mocked = false;
+        var parentDoc = document;
+        var latestSprint;
+        var discoveredThisSprint;
+        var openDefectsSimple = 0;
+
+        var portfolioProjects;
+        var thisPortfolioProject;
+
+        mocked=false;
+        google.load("visualization", "1", {packages:["corechart"]});
+
+        var CalculateDensity = {
+
+        main: function(chartnum) {
+
+           $('#spinner').show();
+
+
+           Deft.Promise.all([RallyService.getPortfolioProjects()]).then({
+                success: function(recordSets) {
+                    portfolioProjects = recordSets[0];
+                    Deft.Promise.all([RallyService.getHierarchicalRequirements()]).then({
+                        success: function(recordSets) {
+                           for (var i = 0; i < recordSets[0].length; i++) {
+                               for (var oid in portfolioProjects) {
+                                   if (oid === recordSets[0][i].toString()) {
+                                     thisPortfolioProject = recordSets[0][i];
+                                     break;
+                                   }
+                               }
+                           }
+                        }
+                    });
+                }
+           });
+
+
+           Deft.Promise.all([RallyService.getSprintDataStore(rkeys[chartnum]),
+                             RallyService.getDefectDataStore(rkeys[chartnum])]).then({
+                  success: function(sprintRecords) {
+                     sprints[chartnum] = new Array();
+                     for (var sname in sprintRecords[0]) {
+                        if (sprintRecords[0][sname].data.StartDate < today) {
+                             sprints[chartnum][sname] = sprintRecords[0][sname];
+                             latestSprint = sname;
+                        }
+                     }
+                     defects[chartnum] = new Array();
+                     defects[chartnum] = sprintRecords[1];
+
+                     CalculateDensity.resetCounters();
+                     CalculateDensity.calculateOpenDefects(chartnum);
+                     CalculateDensity.calculateDefectsByType(chartnum);
+                     CalculateDensity.calculateDefectDensity(chartnum);
+
+                     google.setOnLoadCallback(CalculateDensity.drawChart(chartnum));
+                     google.setOnLoadCallback(CalculateDensity.drawDensityChart(chartnum));
+                     google.setOnLoadCallback(CalculateDensity.drawDensityByTypeChart(chartnum));
+
+                     $('#spinner').hide();
+
+                     CalculateDensity.renderChartLegends(chartnum);
+
+
+                  },
+                  failure: function() {}
+           });
+
+        },
+
+      resetCounters: function() {
+            defectsOpenedArray = new Array();
+            defectsClosedArray = new Array();
+            //chartDefectsOpenDiscovered = new Array();
+            //chartDefectDensity = new Array();
+            accumulativeOpen = new Array();
+            nclocAtSprint = new Array();
+
+            maxOpen = 0;
+            maxDensity = 0;
+            mocked = false;
+            parentDoc = document;
+            openDefectsSimple = 0;
+      },
+
+      renderChartLegends: function(chartnum) {
+             // Set Legend for Defect Density
+             var accumulativeVal = accumulativeOpen[latestSprint]['Cosmetic'] + accumulativeOpen[latestSprint]['Minor'];
+             accumulativeVal += accumulativeOpen[latestSprint]['Major'] + accumulativeOpen[latestSprint]['Crash'];
+             $('#thisLgnd\\#'+chartnum).append("<b>Sprint " + latestSprint + "</b>");
+             $('#nclocLgnd\\#'+chartnum).append(nclocAtSprint[latestSprint]);
+             $('#defectsLgnd\\#'+chartnum).append(openDefectsSimple);
+             var density = openDefectsSimple/(nclocAtSprint[latestSprint]/1000.00);
+             $('#densityLgnd\\#'+chartnum).append(Math.floor(density*1000 + .05)/1000);
+
+             // Set Legend for Defects Opened
+             var closedThisSprint= defectsClosedArray[latestSprint]['Cosmetic'] + defectsClosedArray[latestSprint]['Minor'];
+             closedThisSprint += defectsClosedArray[latestSprint]['Major'] + defectsClosedArray[latestSprint]['Crash'];
+             $('#openLgnd\\#'+chartnum).append(closedThisSprint);
+             $('#discvLgnd\\#'+chartnum).append(discoveredThisSprint);
+
+             // Set Legend for Defect Type
+             $('#crashLgnd\\#'+chartnum).append(accumulativeOpen[latestSprint]['Crash']);
+             $('#majorLgnd\\#'+chartnum).append(accumulativeOpen[latestSprint]['Major']);
+             $('#minorLgnd\\#'+chartnum).append(accumulativeOpen[latestSprint]['Minor']);
+             $('#cosmLgnd\\#'+chartnum).append(accumulativeOpen[latestSprint]['Cosmetic']);
+             $('#noneLgnd\\#'+chartnum).append(accumulativeOpen[latestSprint]['None']);
+
+             // Show legend tables
+             $('[class=legendTable]').each(function() { $(this).show(); });
+      },
+
+      calculateOpenDefects: function(chartnum) {
+		    var index = 0;
+			chartDefectsOpenDiscovered = new Array();
+			chartDefectsOpenDiscovered[0] = ['Date', 'Discovered', 'Open'];
+			accumulativeOpen[0] = 0;
+			prevsname = "";
+
+            for (var dname in defects[chartnum]) {
+              if (defects[chartnum][dname].data.State !== 'Closed' && defects[chartnum][dname].data.State !== 'Deferred'
+                   && defects[chartnum][dname].data.State !== 'Rejected') {
+                             openDefectsSimple += 1;
+                     }
+            }
+
+			for (var sname in sprints[chartnum]) {
+			   defectsOpenedArray[sname] = new Array();
+			   defectsClosedArray[sname] = new Array();
+			   accumulativeOpen[sname] = new Array();
+			   defectsOpenedArray[sname]['Cosmetic'] = 0;
+			   defectsOpenedArray[sname]['Minor'] = 0;
+			   defectsOpenedArray[sname]['Major'] = 0;
+			   defectsOpenedArray[sname]['Crash'] = 0;
+			   defectsOpenedArray[sname]['None'] = 0;
+			   defectsClosedArray[sname]['Cosmetic'] = 0;
+			   defectsClosedArray[sname]['Minor'] = 0;
+			   defectsClosedArray[sname]['Major'] = 0;
+			   defectsClosedArray[sname]['Crash'] = 0;
+			   defectsClosedArray[sname]['None'] = 0;
+			   accumulativeOpen[sname]['Cosmetic'] = 0;
+			   accumulativeOpen[sname]['Minor'] = 0;
+			   accumulativeOpen[sname]['Major'] = 0;
+			   accumulativeOpen[sname]['Crash'] = 0;
+			   accumulativeOpen[sname]['None'] = 0;
+			   for (var dname in defects[chartnum]) {
+
+			         /*if (defects[chartnum][dname].data.CreationDate >= sprints[chartnum][sname].data.StartDate && defects[chartnum][dname].data.CreationDate <= sprints[chartnum][sname].data.EndDate) {
+					     if (defects[chartnum][dname].data.Severity === 'Cosmetic' ) {
+						     defectsOpenedArray[sname]['Cosmetic'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'None' ) {
+						     defectsOpenedArray[sname]['None'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Minor Problem') {
+						     defectsOpenedArray[sname]['Minor'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Major Problem') {
+						     defectsOpenedArray[sname]['Major'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Crash/Data Loss') {
+						     defectsOpenedArray[sname]['Crash'] += 1;
+					     }
+					}
+			         if (defects[chartnum][dname].data.State === 'Closed' && defects[chartnum][dname].data.Iteration != null && defects[chartnum][dname].data.Iteration.Name == sname) {
+					     if (defects[chartnum][dname].data.Severity === 'Cosmetic' ) {
+						     defectsClosedArray[sname]['Cosmetic'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'None' ){
+						     defectsClosedArray[sname]['None'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Minor Problem') {
+						     defectsClosedArray[sname]['Minor'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Major Problem') {
+						     defectsClosedArray[sname]['Major'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Crash/Data Loss') {
+						     defectsClosedArray[sname]['Crash'] += 1;
+					     }
+					}   */
+
+					if (typeof defects[chartnum][dname].data.checkIfOpen === 'undefined' && defects[chartnum][dname].data.CreationDate >= sprints[chartnum][sname].data.StartDate && defects[chartnum][dname].data.CreationDate <= sprints[chartnum][sname].data.EndDate && defects[chartnum][dname].data.State !== 'Rejected' && defects[chartnum][dname].data.State !== 'Deferred') {
+					     if (defects[chartnum][dname].data.Severity === 'None') {
+						     defectsOpenedArray[sname]['None'] += 1;
+        				 }
+					     if (defects[chartnum][dname].data.Severity === 'Cosmetic' ) {
+						     defectsOpenedArray[sname]['Cosmetic'] += 1;
+        				 }
+					     else if (defects[chartnum][dname].data.Severity === 'Minor Problem') {
+						     defectsOpenedArray[sname]['Minor'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Major Problem') {
+						     defectsOpenedArray[sname]['Major'] += 1;
+					     }
+					     else if (defects[chartnum][dname].data.Severity === 'Crash/Data Loss') {
+						     defectsOpenedArray[sname]['Crash'] += 1;
+					     }
+                         defects[chartnum][dname].data.checkIfOpen = "true";
+			        }
+			        if (typeof defects[chartnum][dname].data.checkIfClosed === 'undefined' && defects[chartnum][dname].data.State === 'Closed' ) {
+                         if ((defects[chartnum][dname].data.Iteration != null && defects[chartnum][dname].data.Iteration.Name == sname)) {
+                             if (defects[chartnum][dname].data.Severity === 'None' ) {
+                                 defectsClosedArray[sname]['None'] += 1;
+                             }
+                             else if (defects[chartnum][dname].data.Severity === 'Cosmetic' ) {
+                                 defectsClosedArray[sname]['Cosmetic'] += 1;
+                             }
+                             else if (defects[chartnum][dname].data.Severity === 'Minor Problem') {
+                                 defectsClosedArray[sname]['Minor'] += 1;
+                             }
+                             else if (defects[chartnum][dname].data.Severity === 'Major Problem') {
+                                 defectsClosedArray[sname]['Major'] += 1;
+                             }
+                             else if (defects[chartnum][dname].data.Severity === 'Crash/Data Loss') {
+                                 defectsClosedArray[sname]['Crash'] += 1;
+                             }
+                             defects[chartnum][dname].data.checkIfClosed = "true";
+      					 }
+                         else if ( defects[chartnum][dname].data.Iteration == null &&
+				           defects[chartnum][dname].data.ClosedDate >= sprints[chartnum][sname].data.StartDate &&
+				           defects[chartnum][dname].data.ClosedDate <= sprints[chartnum][sname].data.EndDate ) {
+                                 if (defects[chartnum][dname].data.Severity === 'None' ) {
+                                     defectsClosedArray[sname]['None'] += 1;
+                                 }
+                                 else if (defects[chartnum][dname].data.Severity === 'Cosmetic' ) {
+                                     defectsClosedArray[sname]['Cosmetic'] += 1;
+                                 }
+                                 else if (defects[chartnum][dname].data.Severity === 'Minor Problem') {
+                                     defectsClosedArray[sname]['Minor'] += 1;
+                                 }
+                                 else if (defects[chartnum][dname].data.Severity === 'Major Problem') {
+                                     defectsClosedArray[sname]['Major'] += 1;
+                                 }
+                                 else if (defects[chartnum][dname].data.Severity === 'Crash/Data Loss') {
+                                     defectsClosedArray[sname]['Crash'] += 1;
+                                 }
+                                 defects[chartnum][dname].data.checkIfClosed = "true";
+					     }
+				    }
+			   }
+
+				discoveredThisSprint = defectsOpenedArray[sname]['Cosmetic'] + defectsOpenedArray[sname]['Minor'] + defectsOpenedArray[sname]['Major'] + defectsOpenedArray[sname]['Crash'];
+                accumulativeOpen[sname]['Cosmetic'] = defectsOpenedArray[sname]['Cosmetic'] - defectsClosedArray[sname]['Cosmetic'];
+				accumulativeOpen[sname]['Minor'] = defectsOpenedArray[sname]['Minor'] - defectsClosedArray[sname]['Minor'];
+				accumulativeOpen[sname]['Major'] = defectsOpenedArray[sname]['Major'] - defectsClosedArray[sname]['Major'];
+				accumulativeOpen[sname]['Crash'] = defectsOpenedArray[sname]['Crash'] - defectsClosedArray[sname]['Crash'];
+				accumulativeOpen[sname]['None'] = defectsOpenedArray[sname]['None'] - defectsClosedArray[sname]['None'];
+				if (prevsname != "") {
+				   accumulativeOpen[sname]['Cosmetic'] += accumulativeOpen[prevsname]['Cosmetic'];
+				   accumulativeOpen[sname]['Minor'] += accumulativeOpen[prevsname]['Minor'];
+				   accumulativeOpen[sname]['Major'] += accumulativeOpen[prevsname]['Major'];
+				   accumulativeOpen[sname]['Crash'] += accumulativeOpen[prevsname]['Crash'];
+				   accumulativeOpen[sname]['None'] += accumulativeOpen[prevsname]['None'];
+		        }
+				var accumulativeTotal = accumulativeOpen[sname]['Cosmetic'] + accumulativeOpen[sname]['Minor'] + accumulativeOpen[sname]['Major'] + accumulativeOpen[sname]['Crash'] + accumulativeOpen[sname]['None'];
+				if (accumulativeTotal > maxOpen) { maxOpen = accumulativeTotal; }
+				index++;
+				chartDefectsOpenDiscovered[index] = [sprints[chartnum][sname].data.EndDate.toISOString().split("T")[0], discoveredThisSprint, accumulativeTotal];
+			    prevsname = sname;
+			}
+		},
+
+	    calculateDefectDensity: function(chartnum) {
+			var index = 0;
+			chartDefectDensity = new Array();
+			chartDefectDensity[0] = ['Date', 'Density'];
+			var lastNonZeroLoc = 0;
+			for (var sname in sprints[chartnum]) {
+				index++;
+				nclocAtSprint[sname] = 0;
+                for (scandate in tnclocmap[chartnum]) {
+				   if (scandate >= sprints[chartnum][sname].data.StartDate.toISOString() && scandate <= sprints[chartnum][sname].data.EndDate.toISOString()) {
+				       nclocAtSprint[sname] = tnclocmap[chartnum][scandate];
+				       lastNonZeroLoc = tnclocmap[chartnum][scandate];
+				   }
+			    }
+			    if (nclocAtSprint[sname] === 0) {
+			        nclocAtSprint[sname] = lastNonZeroLoc;
+			    }
+				if (nclocAtSprint[sname] > 0) {
+				   var accumulativeVal = accumulativeOpen[sname]['Cosmetic'] + accumulativeOpen[sname]['Minor'] + accumulativeOpen[sname]['Major'] + accumulativeOpen[sname]['Crash'] + accumulativeOpen[sname]['None'];
+				   chartDefectDensity[index] = [sprints[chartnum][sname].data.EndDate.toISOString().split("T")[0], accumulativeVal / (nclocAtSprint[sname]/1000.00)];
+				   if (chartDefectDensity[index] > maxDensity)
+				       maxDensity = chartDefectDensity[index];
+				} else {
+				   chartDefectDensity[index] = [sprints[chartnum][sname].data.EndDate.toISOString().split("T")[0], 0];
+                }
+			}
+		},
+
+		calculateDefectsByType: function(chartnum) {
+			var index = 0;
+			chartDefectByType = new Array();
+			chartDefectByType[0] = ['Date', 'None', 'Cosmetic', 'Minor', 'Major', 'Crash/Data Loss'];
+			for (var sname in sprints[chartnum]) {
+				index++;
+				chartDefectByType[index] = [sprints[chartnum][sname].data.EndDate.toISOString().split("T")[0], accumulativeOpen[sname]['None'], accumulativeOpen[sname]['Cosmetic'], accumulativeOpen[sname]['Minor'], accumulativeOpen[sname]['Major'], accumulativeOpen[sname]['Crash']];
+			}
+		},
+
+
+      drawChart: function(chartnum) {
+        if (mocked) {
+            var data = google.visualization.arrayToDataTable([
+			  ['Date', 'Discovered', 'Open'],
+			  ['6-1-2013',  3,      2],
+			  ['7-1-2013',  2,      2],
+			  ['8-1-2013',  4,      5],
+			  ['9-1-2013',  3,      8],
+			  ['10-1-2013', 4,     11],
+			  ['11-1-2013', 2,     12],
+			  ['12-1-2013', 5,     15],
+			  ['1-1-2014',  8,     20],
+			  ['2-1-2014',  3,     21],
+			  ['3-1-2014',  1,     22],
+			  ['4-1-2014',  4,     24],
+			  ['5-1-2014',  2,     24],
+			  ['6-1-2014',  1,     16],
+			  ['7-1-2014',  0,     12],
+			  ['8-1-2014',  0,      6],
+			  ['9-1-2014',  0,      1] 
+			]);
+        } else {
+		  var data = google.visualization.arrayToDataTable(chartDefectsOpenDiscovered);
+		}
+		
+        var options = {
+          title: rkeys[chartnum] + ' Open Defects',
+          titleTextStyle: {fontSize: 14},
+	  vAxis: { title:'Defects', viewWindow : {max: maxOpen*1.5}, format:'#' },
+	  chartArea: { left: 60, width: "80%" },
+	  legend: { position: 'bottom' },
+	  backgroundColor: { stroke: '#000000', strokeWidth: 1 }
+        };
+
+        var chart = new google.visualization.LineChart(parentDoc.getElementById('chart_div_defects#'+chartnum));
+        chart.draw(data, options);
+      },
+
+      drawDensityChart: function(chartnum) {
+        if (mocked) {
+			var data = google.visualization.arrayToDataTable([
+			  ['Date', 'Density'],
+			  ['6/1/2013',  4],
+			  ['7/1/2013',  2.25],
+			  ['8/1/2013',  5],
+			  ['9/1/2013',  5.3333],
+			  ['10/1/2013', 6.1111],
+			  ['11/1/2013', 6],
+			  ['12/1/2013', 6.25],
+			  ['1/1/2014',  6.6666667],
+			  ['2/1/2014',  6.17647],
+			  ['3/1/2014',  5.5],
+			  ['4/1/2014',  5.217391],
+			  ['5/1/2014',  5],
+			  ['6/1/2014',  3.265361],
+			  ['7/1/2014',  2.4],
+			  ['8/1/2014',  1.2],
+			  ['9/1/2014',  0.2]
+			]);
+        } else {
+		   var data = google.visualization.arrayToDataTable(chartDefectDensity);
+		}
+		
+        var options = {
+          title: rkeys[chartnum] + ' Density',
+          titleTextStyle: {fontSize: 14},
+	  vAxis: { title:'Density', maxValue: maxDensity+2 },
+          chartArea: { left: 60, width: "80%" },
+	  legend: { position: 'bottom' },
+  	  backgroundColor: { stroke: '#000000', strokeWidth: 1 }
+        };
+
+        var chart = new google.visualization.LineChart(parentDoc.getElementById('chart_div_density#'+chartnum));
+        chart.draw(data, options);
+      },
+	  
+	  drawDensityByTypeChart: function(chartnum) {
+         if (mocked) {
+			 var data = google.visualization.arrayToDataTable([
+			  ['Year', 'Sales', 'Expenses'],
+			  ['2004',  1000,      400],
+			  ['2005',  1170,      460],
+			  ['2006',  660,       1120],
+			  ['2007',  1030,      540]
+			]);
+        } else {
+		     var data = google.visualization.arrayToDataTable(chartDefectByType);
+	    }
+        var options = {
+          title: rkeys[chartnum] + ' Open Defects By Type',
+          titleTextStyle: { fontSize: 14},
+   	  chartArea: { left: 50, width: "55%" },
+	  vAxis: { title: 'Defects', viewWindow : {max: maxOpen*1.5}, format:'#' },
+	  backgroundColor: { stroke: '#000000', strokeWidth: 1 },
+	  series: {0: {color:'blue'}, 1:{color:'green'}, 2:{color:'orange'}, 3:{color:'red'}},
+	  isStacked: true
+        };
+
+        var chart = new google.visualization.ColumnChart(parentDoc.getElementById('chart_div_densityByType#'+chartnum));
+        chart.draw(data, options);
+      }
+    }
+	  </script>
+    
+    <style type="text/css">
+        body {
+            text-align: center;
+        }
+
+        .label {
+            font-size: 12px;
+            font-weight: bold;
+            width: 63px;
+            padding-right: 7px;
+        }
+
+        #chartContainer {
+            background-color: white;
+            width: 700;
+            height: 400;
+            margin-left: auto;
+            margin-right: auto;
+            border: 1px solid black;
+            padding-top: 20px;
+        }
+
+        #projectHeader {
+            font-size: 20px;
+            font-weight: bold;
+            width: 22%;
+        }
+
+        div.chart {
+            margin-right: 10px;
+            width: 450;
+        }
+
+        div.chart h4 {
+            text-align: center;
+        }
+
+        .spinner {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            margin-left: -50px; /* half width of the spinner gif */
+            margin-top: -50px; /* half height of the spinner gif */
+            text-align:center;
+            z-index:1234;
+            overflow: auto;
+            width: 100px; /* width of the spinner gif */
+            height: 102px; /*hight of the spinner gif +2px to fix IE8 issue */
+        }
+
+        #sonarUrlError {
+            color : red;
+            font-size : 9px;
+            display: none;
+        }
+
+        .legendtd {
+            padding: 5px;
+        }
+        .legendTable {
+            font-size: 12px !important;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+<!--div id="dialog" title="Sonar Configuration">
+    <form id="sonarConfig">
+        <table>
+            <tr><td/><td><div id="sonarUrlError">Sonar Url error</div></td></tr>
+            <tr height="45px"><td class="label" align="right">Url</td><td align="left" style="font-size:12px"><input id="sonarUrl" name="sonarUrl" size="50"></td></tr>
+            <tr><td class="label">Project</td>
+                <td align="left" style="font-size:12px">
+                    <select id="projectList" name="projectList"></select>
+                    <input type="text" size="34" id="projectName" name="projectName" style="display:none">
+                </td>
+                <td>&nbsp;&nbsp;&nbsp;<img src="https://3.34.2.84:8443/defectdensity/editIcon.jpeg" width="18px" height="18px" onclick="toggleProjectInput()"/></td>
+            </tr>
+        </table>
+    </form>
+</div-->
+<br>
+<table><tr><td id="projectHeader#0"></td></tr></table>
+<table id="chartsTable">
+	<tr id="chart_row_density">
+		<td style="padding:20px"><div id="chart_div_density#0" style="width:400px;height:300px"/></td>
+                <td><table id="densityLegend#0" border="1" class="legendTable">
+                    <tr><td colspan="2" class="legendtd"><b>Density</b></td></tr>
+                    <tr><td class="legendtd">Open Defects</td><td class="legendtd" id="defectsLgnd#0"></td></tr>
+                    <tr><td class="legendtd">NCLOC</td><td class="legendtd" id="nclocLgnd#0"></td></tr>
+                    <tr><td class="legendtd">Density</td><td class="legendtd" id="densityLgnd#0"></td></tr></table></td>
+	</tr>
+	<tr id="chart_row_densityByType">
+		<td style="padding:20px"><div id="chart_div_defects#0" style="width:400px;height:300px;float:right"/></td>
+                <td><table id="openedLegend#0" border="1" class="legendTable">
+                    <tr><td colspan="2" class="legendtd" id="thisLgnd#0"></td></tr>
+                    <tr><td class="legendtd">Discovered</td><td class="legendtd" id="discvLgnd#0"></td></tr>
+                    <tr><td class="legendtd">Closed</td><td class="legendtd" id="openLgnd#0"></td></tr></table></td>
+	</tr>
+	<tr id="chart_row_defects">
+		<td style="padding:20px"><div id="chart_div_densityByType#0" style="width:400px;height:300px"></div></td>
+                <td><table id="typeLegend#0" border="1" class="legendTable">
+                    <tr><td colspan="2" class="legendtd"><b>Type</b></td></tr>
+                    <tr><td class="legendtd">Crash</td><td class="legendtd" id="crashLgnd#0"></td></tr>
+                    <tr><td class="legendtd">Major</td><td class="legendtd" id="majorLgnd#0"></td></tr>
+                    <tr><td class="legendtd">Minor</td><td class="legendtd" id="minorLgnd#0"></td></tr>
+                    <tr><td class="legendtd">Cosmetic</td><td class="legendtd" id="cosmLgnd#0"></td></tr>
+                    <tr><td class="legendtd">None</td><td class="legendtd" id="noneLgnd#0"></td></tr>
+                </table></td>
+	</tr>
+</table>
+<div id="spinner" class="spinner" style="display:none;">
+    <img id="img-spinner" src="https://3.34.2.84:8443/defectdensity/spinner.gif" alt="Loading"/>
+</div>
+<br style="clear:both"/>
+</div>
+</body>
+</html>
+
