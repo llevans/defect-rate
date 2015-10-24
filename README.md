@@ -4,9 +4,9 @@
 This application calculates density of defects per size of a software project.
 Current defect counts and total lines of code are acquired by Rally and Sonar web services. 
 
-*Density = Defects / (Non-Comment Lines Of Code/1000)* 
+*_Density = Defects / (Non-Comment Lines Of Code/1000)_* 
 
-The accepted industry standard for defect density is 1 defect per 1 Kloc. 
+The accepted industry standard for defect density is _1 defect per 1 Kloc_. 
 
 ##### Design
 ---
