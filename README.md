@@ -1,8 +1,12 @@
 #### Defect-Rate
 ##### Purpose
 ---
-Defect rate appliction to be integrated with a Rally dashboard.
-Calculate the number of open defects occuring at each Sprint end-date to be represented in a line graph.
+This application calculates density of defects per size of a software project.
+Current defect counts and total lines of code are acquired by Rally and Sonar web services. 
+
+-Density = Defects / (Non-Comment Lines Of Code/1000)- 
+
+The accepted industry standard for defect density is 1 defect per 1 Kloc. 
 
 ##### Design
 ---
@@ -15,3 +19,22 @@ Calculate the number of open defects occuring at each Sprint end-date to be repr
   * Calculate defect density or rate  ==> number defects / 1K NCLOC
 * Build graphs
   * Use Google graph api to render graphs
+  
+##### Usage
+---
+This application can be integrated onto your Rally dashboard.
+
+Click the gear in the top right hand corner,
+and select "Add App". Enter "Custom" in the search box,
+and select "Custom HTML". Type in "Defect Density"
+as the App title, and paste in the HTML
+source copied from App.html.txt. 
+To integrate the application onto your dashboard to process
+multiple Rally projects, paste in the HTML source 
+from App-noDialog.html.txt. 
+You will need to edit the 'rallyKey' and 'sonarKey' values
+inside the source which represent the Rally project names
+and Sonar project names respectively.
+Project names are delimited by a pipe "|". 
+
+
