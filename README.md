@@ -1,10 +1,10 @@
 #### Defect-Rate
-## Purpose
+##### Purpose
 ---
 Defect rate appliction to be integrated with a Rally dashboard.
-# open defects occuring at each Sprint end-date is represented in a line graph
+Calculate the number of open defects occuring at each Sprint end-date to be represented in a line graph.
 
-## Design
+##### Design
 ---
 * 3rd party web serivces are invoked to acquire the necessary defect and sprint data:
   * Rally services are called to find Sprint start/end dates and defects.
